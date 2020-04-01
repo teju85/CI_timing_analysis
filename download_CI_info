@@ -1,23 +1,4 @@
 #!/usr/bin/env python
-#
-# DESCRIPTION:
-# Utility script to download CI information across all PRs in the given repo
-# It dumps out a csv file with the following format:
-#  PR#, author, commit, test, status, time(s)
-# In case a particular commit in a PR didn't have CI tests ran against it,
-# that would show up as missing columns for `test`, `status` and `time(s)`
-#
-# USAGE:
-# ./download_CI_info <repo> <token_file> <csv_file> [<after>]
-#  <repo>       the github repo. Eg: https://github.com/rapidsai/cuml
-#  <token_file> contains the github OAuth token stored in this file, which
-#               will be used for authentication
-#  <csv_file>   output csv file
-#  <after>      optional tag which is the tag that is returned by github API
-#               to be used for pagination. You can also get this info from the
-#               debug spews from this script. If this is provided, the PR
-#               queries will only start from after this tag
-#
 
 import requests
 import sys
