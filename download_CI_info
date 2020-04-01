@@ -1,0 +1,169 @@
+#!/usr/bin/env python
+#
+# DESCRIPTION:
+# Utility script to download CI information across all PRs in the given repo
+# It dumps out a csv file with the following format:
+#  PR#, author, commit, test, status, time(s)
+# In case a particular commit in a PR didn't have CI tests ran against it,
+# that would show up as missing columns for `test`, `status` and `time(s)`
+#
+# USAGE:
+# ./download_CI_info <repo> <token_file> <csv_file> [<after>]
+#  <repo>       the github repo. Eg: https://github.com/rapidsai/cuml
+#  <token_file> contains the github OAuth token stored in this file, which
+#               will be used for authentication
+#  <csv_file>   output csv file
+#  <after>      optional tag which is the tag that is returned by github API
+#               to be used for pagination. You can also get this info from the
+#               debug spews from this script. If this is provided, the PR
+#               queries will only start from after this tag
+#
+
+import requests
+import sys
+import json
+import dateutil.parser
+import time
+import csv
+
+
+ENTRYPOINT = "https://api.github.com/graphql"
+
+
+def get_token(tok_file):
+    with open(tok_file) as fp: token = fp.read()
+    return token.rstrip()
+
+
+def get_headers(token):
+    headers = {
+        "Authorization" : "token %s" % token
+    }
+    return headers
+
+
+def get_response(payload, headers):
+    data = json.dumps(payload)
+    res = requests.post(ENTRYPOINT, data=data, headers=headers)
+    return json.loads(res.content)
+
+
+def get_time(time_str):
+    return dateutil.parser.parse(time_str)
+
+
+def time_delta_in_secs(time1_str, time2_str):
+    time1 = get_time(time1_str)
+    time2 = get_time(time2_str)
+    diff = time1 - time2
+    return diff.total_seconds()
+
+
+def query(content, headers):
+    payload = {
+        "query" : "query { " + content + " }"
+    }
+    return get_response(payload, headers)
+
+
+def repo_query(repo_owner, repo_name, content, headers):
+    content = "repository(owner:\"%s\", name: \"%s\") { %s }" % \
+        (repo_owner, repo_name, content)
+    return query(content, headers)
+
+
+def update_pr_info(res):
+    out = []
+    all_prs = res["data"]["repository"]["pullRequests"]["edges"]
+    for pr_item in all_prs:
+        item = pr_item["node"]
+        pr_num = item["number"]
+        author = item["author"]["login"]
+        commits = item["commits"]["nodes"]
+        for com in commits:
+            commit = com["commit"]
+            commit_status = commit["status"]
+            commit_id = commit["oid"]
+            if commit_status is None:
+                out.append([pr_num, author, commit_id, None, None, None])
+                continue
+            for status in commit_status["contexts"]:
+                tag = "pushedDate" if commit["pushedDate"] else "authoredDate"
+                delta = time_delta_in_secs(status["createdAt"], commit[tag])
+                out.append([pr_num, author, commit_id, status["context"],
+                            status["state"], delta])
+    return out
+
+
+def pr(repo_owner, repo_name, headers, csv_file, after=None):
+    qStr = """
+pullRequests(first:40%s) {
+  pageInfo {
+    hasNextPage
+    endCursor
+  }
+  edges { node {
+    number
+    author { login }
+    commits(last:100) {
+      nodes {
+        commit {
+          oid
+          authoredDate
+          pushedDate
+          status {
+            state
+            contexts {
+              createdAt
+              state
+              context
+            }
+          }
+        }
+      }
+    }
+  }}
+}"""
+    append = after is not None
+    csv_fp = open(csv_file, "a" if append else "w")
+    csvWr = csv.writer(csv_fp)
+    if not append:
+        csvWr.writerow(["PR#", "author", "commit", "test", "status", "time(s)"])
+    page_info = {
+        "hasNextPage" : True,
+        "endCursor" : after if after else ""
+    }
+    while page_info["hasNextPage"]:
+        print("Sleeping before starting on after=%s" % page_info["endCursor"])
+        time.sleep(5)
+        if page_info["endCursor"]:
+            txt = ", after:\"%s\"" % page_info["endCursor"]
+        else:
+            txt = ""
+        res = repo_query(repo_owner, repo_name, qStr % txt, headers)
+        try:
+            for pri in update_pr_info(res):
+                csvWr.writerow(pri)
+        except:
+            print(res)
+            raise
+        print("  after=%s ended" % page_info["endCursor"])
+        page_info = res["data"]["repository"]["pullRequests"]["pageInfo"]
+    return
+
+
+def get_owner_info(repo):
+    toks = repo.replace("https://github.com/", "")
+    toks = toks.split("/")
+    return toks[0], toks[1]
+
+
+if __name__ == "__main__":
+    repo, token_file, csv_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    if len(sys.argv) == 5:
+        after = sys.argv[4]
+    else:
+        after = None
+    repo_owner, repo_name = get_owner_info(repo)
+    headers = get_headers(get_token(token_file))
+    pr(repo_owner, repo_name, headers, csv_file, after)
