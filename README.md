@@ -3,6 +3,10 @@ Simple repo to analysis timings of CI tests of a repo. The goal is that such a
 thing would provide insights into where the most time is being spent on our CI
 and thus guide us in optimizing the same.
 
+# Dependencies
+* python
+* jupyter (only if you want to use the accompanying notebook)
+
 # Usage
 ## Download the PR information
 The script `download_CI_info` uses github's graphQL API in order to download
